@@ -8,63 +8,73 @@ def scrape_surrey_events():
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        # Setting a standard window size so the buttons are where we expect them
+        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        page = context.new_page()
         
         url = "https://www.visitsurrey.com/whats-on/family-friendly-events/"
         print(f"Opening {url}...")
-        page.goto(url, wait_until="networkidle")
-
-        page_count = 1
-        while True:
-            print(f"Scraping page {page_count}...")
-            # Wait for events to load
-            page.wait_for_selector(".sys_mag-item", timeout=10000)
-            
-            # Parse the current page content
-            soup = BeautifulSoup(page.content(), 'html.parser')
-            events = soup.find_all('div', class_='sys_mag-item')
-            
-            for event in events:
-                title = event.find('h3').get_text(strip=True)
-                date_text = event.find('p', class_='sys_mag-date').get_text(strip=True)
-                all_events_html += f"<div class='event'><strong>{title}</strong><br>{date_text}</div>"
-
-            # Check if there is a 'Next' button
-            # Usually, these sites use an 'aria-label' or specific text like 'Next' or '>'
-            next_button = page.query_selector("a.sys_pagination-next") # Common class for this site's 'Next'
-            
-            if next_button and page_count < 5: # Safety limit of 5 pages so it doesn't run forever
-                print("Moving to next page...")
-                next_button.click()
-                page.wait_for_load_state("networkidle")
-                page_count += 1
-            else:
-                print("No more pages or limit reached.")
-                break
         
-        browser.close()
+        try:
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            
+            page_count = 1
+            while page_count <= 5: 
+                print(f"Scraping page {page_count}...")
+                
+                # Wait for events to appear
+                page.wait_for_selector(".sys_mag-item", timeout=15000)
+                
+                # Scrape the current page
+                soup = BeautifulSoup(page.content(), 'html.parser')
+                events = soup.find_all('div', class_='sys_mag-item')
+                
+                for event in events:
+                    title_el = event.find('h3')
+                    date_el = event.find('p', class_='sys_mag-date')
+                    if title_el and date_el:
+                        title = title_el.get_text(strip=True)
+                        date_text = date_el.get_text(strip=True)
+                        all_events_html += f"<div class='event'><strong>{title}</strong><br><span class='date'>{date_text}</span></div>"
 
-    # Wrap the collected events in HTML
+                # FIND THE NEXT BUTTON: 
+                # We look for the link that has the 'next' class
+                next_button = page.locator("a.sys_pagination-next")
+                
+                if next_button.is_visible():
+                    print("Found the arrow! Clicking...")
+                    next_button.click()
+                    # Wait for the new content to load
+                    page.wait_for_load_state("networkidle")
+                    page_count += 1
+                else:
+                    print("Reached the last page.")
+                    break
+                    
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            browser.close()
+
+    # Create the HTML file
     today_str = datetime.now().strftime("%d %B %Y")
     final_html = f"""
     <html>
     <head>
         <title>Surrey Events Today</title>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; background: #f4f7f6; }}
-            .container {{ max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            body {{ font-family: -apple-system, sans-serif; padding: 20px; background: #f0f2f5; }}
+            .container {{ max-width: 600px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+            h1 {{ color: #1a73e8; margin-top: 0; }}
             .event {{ border-bottom: 1px solid #eee; padding: 15px 0; }}
-            .event:last-child {{ border-bottom: none; }}
-            h1 {{ color: #d32f2f; border-bottom: 2px solid #d32f2f; padding-bottom: 10px; }}
-            .date {{ color: #666; font-size: 0.9em; }}
+            .date {{ color: #d93025; font-size: 0.9em; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Family Events in Surrey</h1>
-            <p><strong>Date:</strong> {today_str}</p>
+            <h1>Surrey Family Events</h1>
+            <p>Generated on: {today_str}</p>
             {all_events_html if all_events_html else "<p>No events found today.</p>"}
-            <p style="margin-top:20px;"><small>Data updated: {datetime.now().strftime('%H:%M')}</small></p>
         </div>
     </body>
     </html>
